@@ -40,10 +40,17 @@ function App() {
     }, 500);
 
     try {
-      const { data } = await axios.post(
-        'http://localhost:8000/api/summarize/',
-        { text: inputText, summary_length: length }
-      );
+
+      const API = process.env.REACT_APP_API_URL;
+
+       const { data } = await axios.post(`${API}/api/summarize/`,
+         { text: inputText, summary_length: length });
+
+      //const { data } = await axios.post(
+        //'http://localhost:8000/api/summarize/',
+        //{ text: inputText, summary_length: length }
+      //);
+      
       clearInterval(timerRef.current);
       setProgress(100);
       setStatusMsg('Finalizing…');
@@ -69,8 +76,10 @@ function App() {
     formData.append('summary_length', length);
 
     try {
-      const { data } = await axios.post(
-        'http://localhost:8000/api/summarize/file',
+      const API = process.env.REACT_APP_API_URL;
+      const { data } = await axios.post(`${API}/api/summarize/`,
+      //const { data } = await axios.post(
+      //  'http://localhost:8000/api/summarize/file',
         formData,
         {
           headers: { 'Content-Type': 'multipart/form-data' },
