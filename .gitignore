@@ -6,7 +6,18 @@
 # Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
-/models/
+models/BART
+/PEGASUS/
+/Bertsum/
+
+models/
+
+/.DS_Store
+/models/.DS_Store
+/models/BART/config.json
+/models/BART/generation_config.json
+/models/BART/merges.txt
+
 # Virtual environments
 venv/
 .env/
