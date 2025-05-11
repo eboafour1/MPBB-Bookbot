@@ -12,7 +12,7 @@ app = FastAPI(
 # 1) Configure CORS to allow your React dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React’s URL
+    allow_origins=["https://aisummerizer.t24hub.com/"],  # React’s URL
     allow_credentials=True,
     allow_methods=["*"],      # GET, POST, OPTIONS, etc
     allow_headers=["*"],      # any headers you send
