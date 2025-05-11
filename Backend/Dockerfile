@@ -17,22 +17,26 @@ RUN apt-get update && \
       calibre && \
     rm -rf /var/lib/apt/lists/*
 
-# 3) Set working dir
+# Set working dir to inside backend/
 WORKDIR /app
 
-# 4) Copy and install Python dependencies
-COPY requirements.txt .
+# Copy ONLY the backend files
+COPY backend/ .  # <== this is key
+
+# Install Python packages
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
-
-# 5) Copy your application code
-COPY . .
 
 # 6) Expose your FastAPI port
 EXPOSE 8000
 
 # 7) Environment vars
-ENV PYTHONUNBUFFERED=1
+#ENV PYTHONUNBUFFERED=1
 
-# 8) Run the app
+
+# Run FastAPI
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+
+
