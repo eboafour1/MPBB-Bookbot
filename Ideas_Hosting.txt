@@ -1,0 +1,124 @@
+# Hosting Plan for Bookbot AI Project
+
+This document outlines how to deploy and host your Bookbot AI application online, including domain, DNS, frontend, backend, CI/CD, and cost considerations.
+
+---
+
+## 1. Domain & DNS
+
+* **Use existing domain**: e.g., `t24hub.com`. Create a subdomain:
+
+  * **bookbot.t24hub.com** → points to your hosting IP/CNAME.
+* **Alternative**: Register a new domain (\~\$10/yr) via Namecheap or GoDaddy.
+* **DNS Provider**: Cloudflare (free tier) for DNS management and SSL.
+
+  1. Add A record for `bookbot` → your server IP.
+  2. Enable **Proxy (orange cloud)** for DDoS protection.
+  3. Use **Full (strict)** SSL mode.
+
+---
+
+## 2. Frontend Hosting Options
+
+### 2.1 Vercel (Recommended)
+
+* **Pros**: Zero-config for React, free HTTPS, automatic deployments from Git.
+* **Steps**:
+
+  1. Connect your GitHub repo to Vercel.
+  2. Set root to `/frontend` and build command `npm run build`.
+  3. Output directory: `build`.
+  4. Configure custom domain: `bookbot.t24hub.com`.
+
+### 2.2 AWS S3 + CloudFront
+
+* **Pros**: Low cost (\~\$1–2/month), global CDN.
+* **Steps**:
+
+  1. Build React app (`npm run build`).
+  2. Upload `build/` to an S3 bucket (public with website hosting).
+  3. Create CloudFront distribution pointing to S3.
+  4. Add alternate domain (`bookbot.t24hub.com`) and SSL certificate (AWS Certificate Manager).
+
+---
+
+## 3. Backend Hosting Options
+
+### 3.1 DigitalOcean Droplet (CPU-only)
+
+* **Specs**: 8 vCPUs, 32 GB RAM (\~\$48/month)
+* **Pros**: Simple, cost-effective; CPU inference with quantized + ONNX optimized models.
+* **Setup**:
+
+  1. Create a Dockerized FastAPI app (with `Dockerfile`).
+  2. Provision droplet, install Docker & Docker Compose.
+  3. Deploy container and Nginx reverse proxy listening on port 80/443.
+  4. Point `bookbot.t24hub.com` A record to droplet IP.
+
+### 3.2 AWS EC2 GPU Instance (High Performance)
+
+* **Specs**: g4dn.xlarge (1 GPU, 4 vCPU, 16 GB VRAM) ~~\$0.526/hr (~~\$380/month)
+* **Pros**: GPU acceleration for heavy models; fastest inference.
+* **Setup**:
+
+  1. Launch EC2 with Deep Learning AMI.
+  2. Install Docker and NVIDIA Container Toolkit.
+  3. Run Docker container with GPU support.
+  4. Use Nginx or AWS ALB with ACM SSL cert.
+
+### 3.3 AWS ECS Fargate
+
+* **Pros**: Serverless containers; auto-scaling.
+* **Cons**: GPU support not native; better for CPU-optimized workloads.
+
+---
+
+## 4. SSL/TLS & Security
+
+* **Cloudflare**: Free SSL, WAF, DNS.
+* **Let’s Encrypt**: If self-managing (Certbot for Nginx).
+* **SSH Hardening**: Disable root login, use key pairs.
+* **Firewall**: Only ports 80, 443, and SSH.
+
+---
+
+## 5. CI/CD Pipeline
+
+* **GitHub Actions**:
+
+  * Build Docker images for backend & frontend.
+  * Push to Docker Hub or AWS ECR.
+  * Auto-deploy to Droplet via SSH or to AWS ECS.
+* **Vercel**: Auto-deploy frontend on push.
+
+---
+
+## 6. Monitoring & Logging
+
+* **Frontend**: Vercel analytics or CloudFront logs.
+* **Backend**: Prometheus + Grafana or AWS CloudWatch.
+* **Error Tracking**: Sentry for Python & React.
+
+---
+
+## 7. Cost Estimate
+
+| Component              | Monthly Cost Estimate     |
+| ---------------------- | ------------------------- |
+| Domain Registration    | \$10 / year (\~\$1/month) |
+| DigitalOcean Droplet   | \$48                      |
+| Vercel (Hobby)         | \$0                       |
+| AWS EC2 g4dn.xlarge    | \$380                     |
+| AWS S3 + CloudFront    | \$2–5                     |
+| Cloudflare (Free Tier) | \$0                       |
+| **Total (budget)**     | **\~\$51**                |
+| **Total (GPU)**        | **\~\$388**               |
+
+---
+
+### Recommendation
+
+* **Budget**: Use **DigitalOcean Droplet** + **Vercel** for <\$50/month.
+* **Performance**: Use **AWS EC2 GPU** + **S3/CloudFront** + **Route53** for \~\$400/month.
+
+Choose based on your performance needs and budget.
