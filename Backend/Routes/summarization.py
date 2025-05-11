@@ -17,7 +17,7 @@ try:
     from onnxruntime import InferenceSession
 except ImportError:
     InferenceSession = None
-#1
+
 router = APIRouter()
 
 # === Configuration ===
@@ -147,13 +147,30 @@ async def summarize_file(
     with open(file_path, 'wb') as f:
         f.write(await file.read())
 
+    # Determine extension and convert to TXT if needed
     ext = file.filename.rsplit('.', 1)[-1].lower()
-    if ext == 'mobi':
-        txt_path = file_path.replace('.mobi', '.txt')
-        subprocess.run(['ebook-convert', file_path, txt_path], check=True)
-        text = open(txt_path, 'r', encoding='utf-8').read()
+    txt_path = file_path.rsplit('.', 1)[0] + '.txt'
+    # Use Calibre's ebook-convert for supported formats
+    if ext in ['mobi', 'epub', 'pdf', 'docx']:
+        try:
+            subprocess.run(['ebook-convert', file_path, txt_path], check=True)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Conversion to TXT failed: {e}")
+        # Read the converted TXT
+        try:
+            with open(txt_path, 'r', encoding='utf-8') as tf:
+                text = tf.read()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed reading converted TXT: {e}")
+    elif ext == 'txt':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as tf:
+                text = tf.read()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed reading TXT file: {e}")
     else:
-        text = open(file_path, 'r', encoding='utf-8').read()
+        raise HTTPException(status_code=400, detail="Unsupported file type. Supported: .txt, .mobi, .epub, .pdf, .docx")
 
+    # Delegate to summarize() with converted text
     req = SummarizeRequest(text=text, summary_length=summary_length)
     return summarize(req)

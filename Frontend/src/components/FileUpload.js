@@ -1,61 +1,70 @@
 import React from 'react';
 import { Button } from '@mui/material';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
-import ePub from 'epubjs';
+import { getDocument } from 'pdfjs-dist';
+import * as epubjs from 'epubjs';
 import mammoth from 'mammoth';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.js`;
-
-const FileUpload = ({ onFileRead }) => {
+export default function FileUpload({ onText }) {
   const handleChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
     const ext = file.name.split('.').pop().toLowerCase();
+
     let text = '';
     try {
-      if (ext === 'pdf') {
+      if (ext === 'txt') {
+        text = await file.text();
+      }
+      else if (ext === 'pdf') {
+        // PDF parsing via pdfjs
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pdf = await getDocument({ data: arrayBuffer }).promise;
+        let full = '';
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const content = await page.getTextContent();
-          text += content.items.map(item => item.str).join(' ') + ' ';
+          full += content.items.map(item => item.str).join(' ') + '\n\n';
         }
-      } else if (ext === 'txt') {
-        text = await file.text();
-      } else if (ext === 'epub') {
-        const arrayBuffer = await file.arrayBuffer();
-        const book = ePub(arrayBuffer);
-        const { spine } = book;
-        for (const item of spine.spineItems) {
-          const html = await item.load(book.load.bind(book)).then(() => item.render());
-          text += html.replace(/<[^>]+>/g, ' ') + ' ';
+        text = full;
+      }
+      else if (ext === 'epub') {
+        // EPUB parsing via epubjs
+        const book = epubjs(file);
+        await book.ready;
+        const n = book.spine.length;
+        let full = '';
+        for (let i = 0; i < n; i++) {
+          const chapter = await book.spine.get(i).load(book.load.bind(book));
+          full += chapter.text() + '\n\n';
         }
-      } else if (ext === 'docx') {
+        text = full;
+      }
+      else if (ext === 'docx') {
+        // DOCX parsing via mammoth
         const arrayBuffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer });
         text = result.value;
-      } else if (ext === 'mobi') {
-        alert('MOBI format not supported. Please convert to EPUB or PDF first.');
-        return;
-      } else {
-        alert('Unsupported file format.');
+      }
+      else {
+        // For MOBI or other formats, hand off to backend
+        onText(null, file);
         return;
       }
-      onFileRead(text);
+
+      // deliver the plain text back up
+      onText(text, null);
     } catch (err) {
-      console.error('File parsing error:', err);
-      alert('Error reading file. Please try another file.');
+      console.error('Front-end conversion error:', err);
+      // fallback to backend
+      onText(null, file);
     }
   };
 
   return (
     <Button variant="outlined" component="label" fullWidth>
-      Upload File (.txt, .pdf, .epub, .docx)
-      <input hidden type="file" accept=".txt,.pdf,.epub,.docx,.mobi" onChange={handleChange} />
+      Upload File
+      <input hidden type="file" onChange={handleChange} />
     </Button>
   );
-};
-
-export default FileUpload;
+}
