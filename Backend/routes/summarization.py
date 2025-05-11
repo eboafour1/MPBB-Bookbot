@@ -12,7 +12,6 @@ from huggingface_hub import snapshot_download
 from utils.chunking import chunk_text
 from utils.bias_checker import bias_check
 
-# Optional: ONNX runtime for optimized BART
 try:
     from onnxruntime import InferenceSession
 except ImportError:
@@ -28,6 +27,9 @@ MODEL_REPOS = {
 }
 LENGTH_MAP = {"detailed": "pegasus", "medium": "bart", "short": "bertsum"}
 
+# ✅ Use persistent Render disk
+MODEL_BASE = "/app/models"
+
 class SummarizeRequest(BaseModel):
     text: str = Field(..., description="Text to summarize")
     summary_length: str = Field(
@@ -37,37 +39,35 @@ class SummarizeRequest(BaseModel):
 
 @router.post("/")
 def summarize(req: SummarizeRequest):
-    # Determine which model to use
     length_key = req.summary_length.lower()
     if length_key not in LENGTH_MAP:
         raise HTTPException(400, "Invalid summary_length. Use 'detailed', 'medium', or 'short'.")
     model_key = LENGTH_MAP[length_key]
 
-    # Download model from HF Hub (cached locally)
     hf_token = os.getenv("HF_TOKEN")
     repo_id = MODEL_REPOS[model_key]
-    model_path = snapshot_download(repo_id, use_auth_token=hf_token)
+    model_path = snapshot_download(
+        repo_id,
+        use_auth_token=hf_token,
+        cache_dir=os.path.join(MODEL_BASE, model_key)
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-
-    # Split text into word-based chunks
     chunks = chunk_text(req.text, max_words=800)
     MAX_PARTS = 10
 
-    # === Pegasus (Detailed) ===
     if model_key == "pegasus":
         model = AutoModelForSeq2SeqLM.from_pretrained(
             model_path, load_in_8bit=True, device_map='auto'
         )
         abstractive = pipeline("summarization", model=model, tokenizer=tokenizer)
-
-        drafts = [
-            abstractive(chunk, max_length=200, min_length=50)[0]['summary_text']
-            for chunk in chunks
-        ]
+        drafts = [abstractive(chunk, max_length=200, min_length=50)[0]['summary_text'] for chunk in chunks]
         draft_text = "\n".join(drafts)
 
-        # Extractive pass with BERTSum
-        bert_path = snapshot_download(MODEL_REPOS['bertsum'], use_auth_token=hf_token)
+        bert_path = snapshot_download(
+            MODEL_REPOS['bertsum'],
+            use_auth_token=hf_token,
+            cache_dir=os.path.join(MODEL_BASE, "bertsum")
+        )
         bert_tok = AutoTokenizer.from_pretrained(bert_path)
         bert_mod = AutoModelForSeq2SeqLM.from_pretrained(bert_path)
         extractive = pipeline("summarization", model=bert_mod, tokenizer=bert_tok)
@@ -79,7 +79,6 @@ def summarize(req: SummarizeRequest):
 
         return {"summary": bias_check(combined)}
 
-    # === BART (Medium) ===
     elif model_key == "bart":
         onnx_file = os.path.join(model_path, "model.onnx")
         if InferenceSession and not os.path.exists(onnx_file):
@@ -106,17 +105,9 @@ def summarize(req: SummarizeRequest):
             summary_text = summarize_chunk(summary_text)
         return {"summary": summary_text}
 
-    # === BERTSum (Short) via extractive ranking ===
     else:
-        # Load as a classifier
         cls_model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        classifier = pipeline(
-            "text-classification",
-            model=cls_model,
-            tokenizer=tokenizer,
-            return_all_scores=True
-        )
-        # Split into sentences
+        classifier = pipeline("text-classification", model=cls_model, tokenizer=tokenizer, return_all_scores=True)
         sentences = [s.strip() for s in req.text.replace('\n', ' ').split('. ') if s.strip()]
         scored = []
         for sent in sentences:
@@ -126,8 +117,11 @@ def summarize(req: SummarizeRequest):
         top_n = sorted(scored, key=lambda x: x[0], reverse=True)[:5]
         extractive_summary = '. '.join([s for _, s in top_n])
 
-        # Rephrase with Pegasus
-        peg_path = snapshot_download(MODEL_REPOS['pegasus'], use_auth_token=hf_token)
+        peg_path = snapshot_download(
+            MODEL_REPOS['pegasus'],
+            use_auth_token=hf_token,
+            cache_dir=os.path.join(MODEL_BASE, "pegasus")
+        )
         peg_tok = AutoTokenizer.from_pretrained(peg_path)
         peg_mod = AutoModelForSeq2SeqLM.from_pretrained(
             peg_path, load_in_8bit=True, device_map='auto'
@@ -147,16 +141,13 @@ async def summarize_file(
     with open(file_path, 'wb') as f:
         f.write(await file.read())
 
-    # Determine extension and convert to TXT if needed
     ext = file.filename.rsplit('.', 1)[-1].lower()
     txt_path = file_path.rsplit('.', 1)[0] + '.txt'
-    # Use Calibre's ebook-convert for supported formats
     if ext in ['mobi', 'epub', 'pdf', 'docx']:
         try:
             subprocess.run(['ebook-convert', file_path, txt_path], check=True)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Conversion to TXT failed: {e}")
-        # Read the converted TXT
         try:
             with open(txt_path, 'r', encoding='utf-8') as tf:
                 text = tf.read()
@@ -171,6 +162,5 @@ async def summarize_file(
     else:
         raise HTTPException(status_code=400, detail="Unsupported file type. Supported: .txt, .mobi, .epub, .pdf, .docx")
 
-    # Delegate to summarize() with converted text
     req = SummarizeRequest(text=text, summary_length=summary_length)
     return summarize(req)
