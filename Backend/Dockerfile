@@ -1,1 +1,38 @@
-CMD ["uvicorn", "main:app", "--host","0.0.0.0","--port","8000"]
+# syntax=docker/dockerfile:1
+
+# 1) Base image
+FROM python:3.9-slim
+
+# 2) Install system dependencies (including Calibre for ebook-convert)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      git \
+      wget \
+      ca-certificates \
+      libglib2.0-0 \
+      libsm6 \
+      libxext6 \
+      libxrender1 \
+      calibre && \
+    rm -rf /var/lib/apt/lists/*
+
+# 3) Set working dir
+WORKDIR /app
+
+# 4) Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# 5) Copy your application code
+COPY . .
+
+# 6) Expose your FastAPI port
+EXPOSE 8000
+
+# 7) Environment vars
+ENV PYTHONUNBUFFERED=1
+
+# 8) Run the app
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
