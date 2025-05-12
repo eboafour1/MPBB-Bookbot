@@ -6,16 +6,11 @@ from transformers import (
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
-    pipeline,
+    pipeline
 )
 from huggingface_hub import snapshot_download
 from utils.chunking import chunk_text
 from utils.bias_checker import bias_check
-
-try:
-    from onnxruntime import InferenceSession
-except ImportError:
-    InferenceSession = None
 
 router = APIRouter()
 
@@ -26,9 +21,6 @@ MODEL_REPOS = {
     "bertsum": "eboafour1/bertsum"
 }
 LENGTH_MAP = {"detailed": "pegasus", "medium": "bart", "short": "bertsum"}
-
-# ✅ Use persistent Render disk
-MODEL_BASE = "/app/models"
 
 class SummarizeRequest(BaseModel):
     text: str = Field(..., description="Text to summarize")
@@ -46,32 +38,40 @@ def summarize(req: SummarizeRequest):
 
     hf_token = os.getenv("HF_TOKEN")
     repo_id = MODEL_REPOS[model_key]
-    model_path = snapshot_download(
-        repo_id,
-        use_auth_token=hf_token,
-        cache_dir=os.path.join(MODEL_BASE, model_key)
-    )
+    model_path = snapshot_download(repo_id, use_auth_token=hf_token)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     chunks = chunk_text(req.text, max_words=800)
     MAX_PARTS = 10
 
     if model_key == "pegasus":
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_path, device_map='auto'
-        )
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
         abstractive = pipeline("summarization", model=model, tokenizer=tokenizer)
-        drafts = [abstractive(chunk, max_length=200, min_length=50)[0]['summary_text'] for chunk in chunks]
+
+        max_input_len = tokenizer.model_max_length
+        drafts = []
+        for chunk in chunks:
+            tokens = tokenizer(chunk, truncation=True, max_length=max_input_len, return_tensors='pt')
+            truncated_input = tokenizer.decode(tokens['input_ids'][0], skip_special_tokens=True)
+            summary = abstractive(truncated_input, max_length=200, min_length=50, truncation=True)[0]['summary_text']
+            drafts.append(summary)
+
         draft_text = "\n".join(drafts)
 
-        bert_path = snapshot_download(
-            MODEL_REPOS['bertsum'],
-            use_auth_token=hf_token,
-            cache_dir=os.path.join(MODEL_BASE, "bertsum")
-        )
+        # Extractive pass with BERTSum
+        bert_path = snapshot_download(MODEL_REPOS['bertsum'], use_auth_token=hf_token)
         bert_tok = AutoTokenizer.from_pretrained(bert_path)
-        bert_mod = AutoModelForSeq2SeqLM.from_pretrained(bert_path)
-        extractive = pipeline("summarization", model=bert_mod, tokenizer=bert_tok)
-        key_points = extractive(req.text, max_length=80, min_length=40)[0]['summary_text']
+        bert_mod = AutoModelForSequenceClassification.from_pretrained(bert_path)
+        extractive = pipeline("text-classification", model=bert_mod, tokenizer=bert_tok, return_all_scores=True)
+        sentences = req.text.replace('\n', ' ').split('. ')
+        scored = []
+        for sent in sentences:
+            if not sent.strip():
+                continue
+            scores = extractive(sent)[0]
+            key_score = next(item['score'] for item in scores if item['label'] in ('LABEL_1', '1'))
+            scored.append((key_score, sent))
+        top_n = sorted(scored, key=lambda x: x[0], reverse=True)[:5]
+        key_points = '. '.join([s for _, s in top_n])
 
         combined = draft_text + "\n" + key_points
         if len(drafts) > MAX_PARTS:
@@ -80,29 +80,15 @@ def summarize(req: SummarizeRequest):
         return {"summary": bias_check(combined)}
 
     elif model_key == "bart":
-        onnx_file = os.path.join(model_path, "model.onnx")
-        if InferenceSession and not os.path.exists(onnx_file):
-            subprocess.run([
-                "python", "-m", "transformers.onnx",
-                f"--model={model_path}", onnx_file
-            ], check=True)
-
-        if InferenceSession and os.path.exists(onnx_file):
-            session = InferenceSession(onnx_file)
-            def summarize_chunk(txt):
-                inputs = tokenizer(txt, return_tensors='pt', truncation=True)
-                ort_inputs = {session.get_inputs()[0].name: inputs['input_ids'].cpu().numpy()}
-                ort_outs = session.run(None, ort_inputs)
-                return tokenizer.decode(ort_outs[0][0], skip_special_tokens=True)
-        else:
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
-            pipe = pipeline("summarization", model=model, tokenizer=tokenizer)
-            summarize_chunk = lambda t: pipe(t, max_length=150, min_length=60)[0]['summary_text']
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
+        pipe = pipeline("summarization", model=model, tokenizer=tokenizer)
+        summarize_chunk = lambda t: pipe(t, max_length=150, min_length=60)[0]['summary_text']
 
         parts = [bias_check(summarize_chunk(chunk)) for chunk in chunks]
         summary_text = "\n".join(parts)
         if len(parts) > MAX_PARTS:
             summary_text = summarize_chunk(summary_text)
+
         return {"summary": summary_text}
 
     else:
@@ -117,17 +103,12 @@ def summarize(req: SummarizeRequest):
         top_n = sorted(scored, key=lambda x: x[0], reverse=True)[:5]
         extractive_summary = '. '.join([s for _, s in top_n])
 
-        peg_path = snapshot_download(
-            MODEL_REPOS['pegasus'],
-            use_auth_token=hf_token,
-            cache_dir=os.path.join(MODEL_BASE, "pegasus")
-        )
+        peg_path = snapshot_download(MODEL_REPOS['pegasus'], use_auth_token=hf_token)
         peg_tok = AutoTokenizer.from_pretrained(peg_path)
-        peg_mod = AutoModelForSeq2SeqLM.from_pretrained(
-            peg_path, device_map='auto'
-        )
+        peg_mod = AutoModelForSeq2SeqLM.from_pretrained(peg_path)
         rephraser = pipeline("summarization", model=peg_mod, tokenizer=peg_tok)
         final = rephraser(extractive_summary, max_length=100, min_length=40)[0]['summary_text']
+
         return {"summary": bias_check(final)}
 
 @router.post("/file")
@@ -143,6 +124,7 @@ async def summarize_file(
 
     ext = file.filename.rsplit('.', 1)[-1].lower()
     txt_path = file_path.rsplit('.', 1)[0] + '.txt'
+
     if ext in ['mobi', 'epub', 'pdf', 'docx']:
         try:
             subprocess.run(['ebook-convert', file_path, txt_path], check=True)
