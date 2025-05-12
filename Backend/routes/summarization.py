@@ -57,7 +57,7 @@ def summarize(req: SummarizeRequest):
 
     if model_key == "pegasus":
         model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_path, load_in_8bit=True, device_map='auto'
+            model_path, device_map='auto'
         )
         abstractive = pipeline("summarization", model=model, tokenizer=tokenizer)
         drafts = [abstractive(chunk, max_length=200, min_length=50)[0]['summary_text'] for chunk in chunks]
@@ -124,7 +124,7 @@ def summarize(req: SummarizeRequest):
         )
         peg_tok = AutoTokenizer.from_pretrained(peg_path)
         peg_mod = AutoModelForSeq2SeqLM.from_pretrained(
-            peg_path, load_in_8bit=True, device_map='auto'
+            peg_path, device_map='auto'
         )
         rephraser = pipeline("summarization", model=peg_mod, tokenizer=peg_tok)
         final = rephraser(extractive_summary, max_length=100, min_length=40)[0]['summary_text']
